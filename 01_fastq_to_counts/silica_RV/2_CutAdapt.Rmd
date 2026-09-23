@@ -1,0 +1,237 @@
+---
+title: "CutAdapt on bulk RNAseq data"
+author: "Xiting Yan (ported to Bouchet/mouse by jfd42)"
+date: "2026-07-06"
+output:
+  html_notebook:
+    code_folding: hide
+    fig_caption: yes
+    highlight: tango
+    number_sections: no
+    theme: united
+    toc: yes
+    toc_depth: 6
+    toc_float: yes
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(eval=TRUE,echo = TRUE,cache=TRUE,warning=FALSE,message = FALSE,results='hold',cache.lazy = FALSE)
+knitr::opts_knit$set(eval.after = 'fig.cap',dev=c('png','postscript'))
+
+library(gdata)
+library(knitr)
+library(nlme)
+library(rgl)
+library(gplots)
+
+knit_hooks$set(webgl = hook_webgl)
+```
+
+
+# Background
+
+In this note, we use R to generate sh files to run Cutadapt on the silica PA vs RV bulk RNA-seq data (Plasmidsaurus SS8VZG, mouse). The reads are **single-end**. We trim:
+1. Illumina Universal Adapter (AGATCGGAAGAG)
+2. PolyA tails
+3. PolyG tails (NextSeq/NovaSeq artifacts)
+
+Cutadapt is loaded as a module:
+```
+module load cutadapt/5.1-GCCcore-13.3.0
+```
+
+# Cutadapt (single-end)
+
+Run directly on Bouchet HPC.
+```{r}
+# This chunk needs to be run on the HPC directly
+# NOTE: set data.dir to the tissue you are processing (lung shown; swap to rv for the RV run).
+home.dir<-"/nfs/roberts/home/jfd42"
+source("/nfs/roberts/project/pi_epm38/jfd42/pipelines/Xiting_bulkRNA_FastQtoCounts/my_functions.R")
+work.dir<-"/nfs/roberts/scratch/pi_epm38/jfd42/silica_RV"
+data.dir<-"/nfs/roberts/project/pi_epm38/jfd42/silica/FASTQ_files/rv"
+
+fastq.filenames<-list.files(data.dir, pattern="\\.fastq\\.gz$", full.names=FALSE)
+sample.names<-sub("\\.fastq\\.gz$","",fastq.filenames)
+
+script.dir<-file.path(work.dir,"scripts_cutadapt")
+output.dir<-file.path(work.dir,"results_cutadapt")
+
+if(file.exists(script.dir)==F){
+  dir.create(script.dir)
+}
+
+if(file.exists(output.dir)==F){
+  dir.create(output.dir)
+}
+
+jobsub.filepath<-file.path(script.dir,"jobsub.bat")
+if(file.exists(jobsub.filepath)){
+  file.remove(jobsub.filepath)
+}
+file.create(jobsub.filepath)
+
+for(i in 1:length(fastq.filenames)){
+  fastq.filepath<-file.path(data.dir,fastq.filenames[i])
+  jobname<-sample.names[i]
+  output.subdir<-file.path(output.dir,jobname)
+  if(file.exists(output.subdir)==F){
+    dir.create(output.subdir)
+  }
+
+  script.filepath<-file.path(script.dir,paste(jobname,".sh",sep=""))
+
+  temp<-"#!/bin/bash\n"
+  temp<-paste0(temp,"#SBATCH --partition=day\n")
+  temp<-paste0(temp,"#SBATCH --job-name=",jobname,"\n")
+  temp<-paste0(temp,"#SBATCH --ntasks=1\n")
+  temp<-paste0(temp,"#SBATCH --cpus-per-task=10\n")
+  temp<-paste0(temp,"#SBATCH --mem-per-cpu=6Gb\n")
+  temp<-paste0(temp,"#SBATCH --time=1-00:00:00\n")
+  temp<-paste0(temp,"module load cutadapt/5.1-GCCcore-13.3.0\n")
+
+  # Intermediate output file names (single-end, no paired _round files for R2)
+  r1.out1<-file.path(output.subdir,paste0(jobname,"_round1.fastq.gz"))
+  r1.out2<-file.path(output.subdir,paste0(jobname,"_round2.fastq.gz"))
+  r1.out3<-file.path(output.subdir,fastq.filenames[i])
+
+  # Round 1: trim Illumina Universal Adapter
+  temp<-paste(temp,"cutadapt -a AGATCGGAAGAG -q 15 -m 30 --max-n 2 -j 10 -o ",r1.out1," ",fastq.filepath,"\n",sep="")
+
+  # Round 2: trim polyA tail
+  temp<-paste(temp,"cutadapt --poly-a -m 30 --max-n 2 -j 10 -o ",r1.out2," ",r1.out1,"\n",sep="")
+
+  # Round 3: trim polyG (NextSeq/NovaSeq artifact)
+  temp<-paste(temp,"cutadapt --nextseq-trim=20 -m 30 --max-n 2 -j 10 -o ",r1.out3," ",r1.out2,"\n",sep="")
+
+  cat(temp,file=script.filepath,append=F)
+  cat("sbatch < ",script.filepath,"\n",sep="",file=jobsub.filepath,append=T)
+}
+system(paste("chmod 700 ",jobsub.filepath,sep=""))
+```
+
+Submit all jobs by running `jobsub.bat` in the terminal.
+
+# FastQC on trimmed reads
+
+Run FastQC on the final trimmed output to verify adapter/artifact removal.
+
+```{r}
+# Run on HPC
+source("/nfs/roberts/project/pi_epm38/jfd42/pipelines/Xiting_bulkRNA_FastQtoCounts/my_functions.R")
+work.dir<-"/nfs/roberts/scratch/pi_epm38/jfd42/silica_RV"
+cutadapt.dir<-file.path(work.dir,"results_cutadapt")
+
+script.dir<-file.path(work.dir,"scripts_fastqc_2")
+output.dir<-file.path(work.dir,"results_fastqc_2")
+
+if(file.exists(script.dir)==F){
+  dir.create(script.dir)
+}
+
+if(file.exists(output.dir)==F){
+  dir.create(output.dir)
+}
+
+jobsub.filepath<-file.path(script.dir,"jobsub.bat")
+if(file.exists(jobsub.filepath)){
+  file.remove(jobsub.filepath)
+}
+file.create(jobsub.filepath)
+
+sample.names<-list.files(cutadapt.dir)
+
+for(i in 1:length(sample.names)){
+  script.filepath<-file.path(script.dir,paste(sample.names[i],".sh",sep=""))
+  output.subdir<-file.path(output.dir,sample.names[i])
+  if(file.exists(output.subdir)==F){
+    dir.create(output.subdir)
+  }
+
+  cmd.out<-"#!/bin/bash\n"
+  cmd.out<-paste(cmd.out,"#SBATCH --partition=day\n",sep="")
+  cmd.out<-paste(cmd.out,"#SBATCH --job-name=",sample.names[i],"\n",sep="")
+  cmd.out<-paste(cmd.out,"#SBATCH --ntasks=1\n",sep="")
+  cmd.out<-paste(cmd.out,"#SBATCH --cpus-per-task=10\n",sep="")
+  cmd.out<-paste(cmd.out,"#SBATCH --mem-per-cpu=10G\n",sep="")
+  cmd.out<-paste(cmd.out,"#SBATCH --time=1-00:00:00\n",sep="")
+  cmd.out<-paste(cmd.out,"module load Perl/5.38.2-GCCcore-13.3.0\n",sep="")
+  cmd.out<-paste(cmd.out,"module load FastQC/0.12.1-Java-17\n",sep="")
+
+  # Only the final trimmed file (exclude _round1 and _round2 intermediates)
+  fastq.filepath<-list.files(file.path(cutadapt.dir,sample.names[i]),full.names=TRUE)
+  fastq.filepath<-fastq.filepath[-grep("_round1",fastq.filepath)]
+  fastq.filepath<-fastq.filepath[-grep("_round2",fastq.filepath)]
+
+  temp<-paste("fastqc -o ",output.subdir," -t 10 ",fastq.filepath,"\n",sep="")
+  cmd.out<-paste(cmd.out,paste(temp,collapse="\n"),sep="")
+  cat(cmd.out,file=script.filepath,append=F)
+
+  cat("sbatch < ",script.filepath,"\n",sep="",file=jobsub.filepath,append=T)
+}
+system(paste("chmod 700 ",jobsub.filepath,sep=""))
+```
+
+Unzip and summarize results.
+```{r}
+result.dir<-"/nfs/roberts/scratch/pi_epm38/jfd42/silica_RV/results_fastqc_2"
+sample.names<-list.files(result.dir)
+
+for(i in 1:length(sample.names)){
+  filenames<-list.files(file.path(result.dir,sample.names[i]))
+  filenames<-filenames[grep(".zip",filenames)]
+  for(j in 1:length(filenames)){
+    unzip(file.path(result.dir,sample.names[i],filenames[j]),exdir=file.path(result.dir,sample.names[i]))
+  }
+}
+```
+
+```{r}
+source("/nfs/roberts/project/pi_epm38/jfd42/pipelines/Xiting_bulkRNA_FastQtoCounts/my_functions.R")
+result.dir<-"/nfs/roberts/scratch/pi_epm38/jfd42/silica_RV/results_fastqc_2"
+output.filepath<-"/nfs/roberts/scratch/pi_epm38/jfd42/silica_RV/FastQC_results_table_2.txt"
+sample.names<-list.files(result.dir)
+cmd.out<-data.frame()
+filenames.vect<-character()
+
+for(i in 1:length(sample.names)){
+  result.subdir<-file.path(result.dir,sample.names[i])
+  temp.dirs<-list.dirs(result.subdir,full.names=F,recursive=FALSE)
+  input.filenames<-file.path(temp.dirs,"summary.txt")
+  filenames.vect<-c(filenames.vect,temp.dirs)
+  input.filepath<-file.path(result.subdir,input.filenames)
+
+  my.data.1<-data.frame()
+  for(j in 1:length(input.filepath)){
+    temp.text<-as.matrix(read.table(input.filepath[j],sep="\t",header=F,check.names=F))
+    temp.values<-temp.text[,1]
+    names(temp.values)<-temp.text[,2]
+    my.data.1<-rbind(my.data.1,as.data.frame(t(temp.values)))
+  }
+
+  input.filenames<-file.path(temp.dirs,"fastqc_data.txt")
+  input.filepath<-file.path(result.subdir,input.filenames)
+  my.data<-data.frame()
+  for(j in 1:length(input.filepath)){
+    temp.text<-readLines(input.filepath[j])
+    over.start<-grep(">>Overrepresented sequences",temp.text)
+    adapter.start<-grep(">>Adapter Content",temp.text)
+    my.temp<-data.frame(overrepresented_sequence=my.element.extract(temp.text[over.start+2],splitchar="\t",index=1))
+    temp.names<-unlist(strsplit(temp.text[adapter.start+1],split="\t"))
+    temp.values<-unlist(strsplit(temp.text[length(temp.text)-1],split="\t"))
+    temp.values<-temp.values[-1]
+    names(temp.values)<-temp.names[2:length(temp.names)]
+    temp.values<-as.data.frame(t(temp.values))
+    my.temp<-cbind(my.temp,temp.values)
+    my.data<-rbind(my.data,my.temp)
+  }
+
+  my.data<-cbind(my.data.1,my.data)
+  cmd.out<-rbind(cmd.out,my.data)
+}
+
+rownames(cmd.out)<-filenames.vect
+
+cat("filenames\t",file=output.filepath,append=F)
+write.table(cmd.out,file=output.filepath,sep="\t",row.names=T,col.names=T,quote=F,append=T)
+```

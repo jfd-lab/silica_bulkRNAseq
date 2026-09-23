@@ -1,0 +1,159 @@
+---
+title: "STAR mapping on bulk RNAseq data"
+author: "Xiting Yan (ported to Bouchet/mouse by jfd42)"
+date: "2026-07-06"
+output:
+  html_notebook:
+    code_folding: hide
+    fig_caption: yes
+    highlight: tango
+    number_sections: no
+    theme: united
+    toc: yes
+    toc_depth: 6
+    toc_float: yes
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(eval=TRUE,echo = TRUE,cache=TRUE,warning=FALSE,message = FALSE,results='hold',cache.lazy = FALSE)
+knitr::opts_knit$set(eval.after = 'fig.cap',dev=c('png','postscript'))
+
+library(gdata)
+library(knitr)
+library(nlme)
+library(rgl)
+library(gplots)
+
+knit_hooks$set(webgl = hook_webgl)
+```
+
+
+# Background
+
+In this note, we use R to generate sh files to run STAR on the silica PA vs RV bulk RNA-seq data (Plasmidsaurus SS8VZG). The reads are **single-end** and map to the **mouse genome (GRCm39, GENCODE M39)**.
+
+# Build Genome Index
+
+Build the GRCm39 (GENCODE M39) STAR index if not already available.
+
+**sjdbOverhang note:** this should be (max read length - 1). Xiting's human data maxed at 94 bp, so she used sjdbOverhang=93. CONFIRM your Plasmidsaurus read length before building (from the first FastQC "Sequence length", or:
+`zcat one_sample.fastq.gz | head -400 | awk 'NR%4==2{print length($0)}' | sort -n | tail -1`).
+If your reads are also 94 bp, keep 93 below. Otherwise change both the index build and the STAR call.
+
+Run the reference download first (00_download_reference.sh) so the FASTA and GTF exist on project space.
+
+```
+salloc -t 6:00:00 --mem=120Gb -N 1 -n 1 --cpus-per-task 20 -p day
+module load STAR/2.7.11b-GCC-13.3.0
+STAR --runMode genomeGenerate --runThreadN 20 \
+  --genomeDir /nfs/roberts/project/pi_epm38/jfd42/STARindex/GRCm39_94 \
+  --genomeFastaFiles /nfs/roberts/project/pi_epm38/jfd42/GENCODE/GRCm39/GRCm39.primary_assembly.genome.fa \
+  --sjdbGTFfile /nfs/roberts/project/pi_epm38/jfd42/GENCODE/GRCm39/gencode.vM39.primary_assembly.annotation.gtf \
+  --sjdbOverhang 93
+```
+
+# Run STAR mapping
+
+Single-end reads; one fastq file per sample. Set data.dir to the tissue you are processing (lung shown; swap to rv for the RV run). Point data.dir at the trimmed cutadapt output for this tissue.
+```{r}
+# This chunk needs to be run on the HPC directly
+home.dir<-"/nfs/roberts/home/jfd42"
+source("/nfs/roberts/project/pi_epm38/jfd42/pipelines/Xiting_bulkRNA_FastQtoCounts/my_functions.R")
+work.dir<-"/nfs/roberts/scratch/pi_epm38/jfd42/silica_RV"
+data.dir<-file.path(work.dir,"results_cutadapt")   # trimmed reads (one subdir per sample)
+star.index.dir<-"/nfs/roberts/project/pi_epm38/jfd42/STARindex/GRCm39_94"
+sjdb.filepath<-"/nfs/roberts/project/pi_epm38/jfd42/GENCODE/GRCm39/gencode.vM39.primary_assembly.annotation.gtf"
+
+sample.names<-list.files(data.dir)
+sample.names<-sapply(sample.names,my.element.extract,splitchar="\\.",index=1)
+
+script.dir<-file.path(work.dir,"scripts_STAR_GRCm39")
+output.dir<-file.path(work.dir,"results_STAR_GRCm39")
+
+if(file.exists(script.dir)==F){
+  dir.create(script.dir)
+}
+
+if(file.exists(output.dir)==F){
+  dir.create(output.dir)
+}
+
+jobsub.filepath<-file.path(script.dir,"jobsub.bat")
+if(file.exists(jobsub.filepath)){
+  file.remove(jobsub.filepath)
+}
+file.create(jobsub.filepath)
+
+for(i in 1:length(sample.names)){
+  data.subdir<-file.path(data.dir,sample.names[i])
+  output.subdir<-file.path(output.dir,sample.names[i])
+  if(file.exists(output.subdir)==F){
+    dir.create(output.subdir)
+  }
+
+  # Get the final trimmed fastq (exclude round1/round2 intermediates)
+  fastq.filenames<-list.files(data.subdir,full.names=FALSE,recursive=FALSE)
+  fastq.filenames<-fastq.filenames[grep("\\.fastq\\.gz$",fastq.filenames)]
+  fastq.filenames<-fastq.filenames[-grep("_round1",fastq.filenames)]
+  fastq.filenames<-fastq.filenames[-grep("_round2",fastq.filenames)]
+  fastq.filepath<-file.path(data.subdir,fastq.filenames)
+  if(length(fastq.filepath)>1){
+    cat("i=",i,":",sample.names[i]," has more than 1 fastq file.\n")
+  }
+  jobname<-sample.names[i]
+
+  script.filepath<-file.path(script.dir,paste(jobname,".sh",sep=""))
+
+  temp<-"#!/bin/bash\n"
+  temp<-paste0(temp,"#SBATCH --partition=day\n")
+  temp<-paste0(temp,"#SBATCH --job-name=",jobname,"\n")
+  temp<-paste0(temp,"#SBATCH --nodes=1 --cpus-per-task=10 --mem=40Gb\n")
+  temp<-paste0(temp,"#SBATCH --time=1-00:00:00\n")
+  temp<-paste0(temp,"#SBATCH --mail-type=NONE\n")
+  temp<-paste0(temp,"#SBATCH --error=",script.filepath,".e%J\n","#SBATCH --output=",script.filepath,".o%J","\n",sep="")
+  temp<-paste(temp,"module load STAR/2.7.11b-GCC-13.3.0\n",sep="")
+
+  # Single-end: only one file in --readFilesIn
+  temp<-paste(temp,"STAR --readFilesCommand zcat --outSAMtype BAM SortedByCoordinate --outSAMprimaryFlag AllBestScore --bamRemoveDuplicatesType UniqueIdentical --outSAMstrandField intronMotif --outFilterIntronMotifs RemoveNoncanonical --runThreadN 10 --genomeDir ",star.index.dir," --sjdbGTFfile ",sjdb.filepath," --sjdbOverhang 93 --twopassMode Basic"," --readFilesIn ",fastq.filepath," --outFileNamePrefix ",file.path(output.subdir,sample.names[i]),sep="")
+
+  cat(temp,file=script.filepath,append=F)
+  cat("sbatch < ",script.filepath,"\n",sep="",file=jobsub.filepath,append=T)
+}
+system(paste("chmod 700 ",jobsub.filepath,sep=""))
+```
+
+Submit all jobs by running `jobsub.bat` in the terminal.
+
+# Generate mapping summary table
+```{r}
+rm(list=ls())
+source("/nfs/roberts/project/pi_epm38/jfd42/pipelines/Xiting_bulkRNA_FastQtoCounts/my_functions.R")
+work.dir<-"/nfs/roberts/scratch/pi_epm38/jfd42/silica_RV"
+data.dir<-file.path(work.dir,"results_STAR_GRCm39")
+output.filepath<-file.path(work.dir,"STAR_mapping_summary.txt")
+
+file.names<-list.files(data.dir)
+sample.names<-file.names
+star.matrix<-numeric()
+
+for(i in 1:length(file.names)){
+  filepath<-list.files(file.path(data.dir,file.names[i]))
+  filepath<-filepath[grep(".final.",filepath)]
+  filepath<-file.path(data.dir,file.names[i],filepath)
+
+  temp<-readLines(filepath)
+  temp.vect<-as.numeric(my.element.extract(temp[grep(" Number of input reads",temp)],splitchar="\t",index=-1))
+  temp.vect<-c(temp.vect,as.numeric(my.element.extract(temp[grep("Uniquely mapped reads number",temp)],splitchar="\t",index=-1)))
+  temp.vect<-c(temp.vect,as.numeric(my.element.extract(temp[grep("Number of reads mapped to multiple loci",temp)],splitchar="\t",index=-1)))
+  star.matrix<-rbind(star.matrix,temp.vect)
+}
+
+rownames(star.matrix)<-sample.names
+colnames(star.matrix)<-c("total","mapped_unique","mapped_multi")
+# Single-end: no *2 multiplication (paired-end counts both reads)
+star.matrix<-cbind(star.matrix,star.matrix[,2]/star.matrix[,1])
+star.matrix<-cbind(rownames(star.matrix),star.matrix)
+colnames(star.matrix)<-c("sample_names","total","mapped_unique","mapped_multi","unique_maprate")
+
+write.table(star.matrix,file=output.filepath,append=F,sep="\t",row.names=F,col.names=T,quote=F)
+```

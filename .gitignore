@@ -1,0 +1,38 @@
+# ===== Large data & derived objects — host on GEO/Zenodo, not GitHub =====
+*.rds
+*.txt.gz
+rawcounts*.txt
+normalized_counts*.csv
+
+# ===== Analysis outputs / results (regenerable from the code) =====
+results_lung/
+results_rv_HbAdjusted/
+enrichment_lung/
+enrichment_rv/
+QC_reports/
+post_alignment_qc/
+
+# ===== SLURM / job logs =====
+slurm-*.out
+*.o[0-9]*
+*.e[0-9]*
+
+# ===== Backups & temp files =====
+*.bak
+tmp_*
+
+# ===== R / session cruft =====
+.Rhistory
+.RData
+.Rproj.user/
+.Ruserdata
+
+# ===== Jupyter =====
+.ipynb_checkpoints/
+
+# ===== renv (keep renv.lock, drop the installed library) =====
+renv/library/
+renv/staging/
+
+# ===== OS =====
+.DS_Store

@@ -1,0 +1,16 @@
+sample_id,Sex,Exposure,Tissue,Mouse_ID,Notes
+CTRL_F1,F,CTRL,LUNG,FC1,low mapping (~3.1M reads / 79% unique) - watch in QC
+CTRL_F2,F,CTRL,LUNG,FC2,
+CTRL_F4,F,CTRL,LUNG,FC4,VERIFY: filename FC4 vs decoding sheet 4FC - same mouse?
+CTRL_M1,M,CTRL,LUNG,MC1,low mapping (~4.8M reads / 69% unique) - watch in QC
+CTRL_M2,M,CTRL,LUNG,MC2,
+CTRL_M3,M,CTRL,LUNG,MC3,
+F1C1,F,Crystalline,LUNG,F1C1,
+F1C2,F,Crystalline,LUNG,F1C2,
+F2C2,F,Crystalline,LUNG,F2C2,
+M1C1,M,Crystalline,LUNG,M1C1,
+M1C2,M,Crystalline,LUNG,M1C2,
+M1C3,M,Crystalline,LUNG,M1C3,
+FAmp_0,F,Amorphous,LUNG,AMO,VERIFY: FAmp_0 = mouse AMO?
+FAmp_LL,F,Amorphous,LUNG,AMLL,VERIFY: FAmp_LL = mouse AMLL?
+FAmp_RR,F,Amorphous,LUNG,AMRR,VERIFY: FAmp_RR = mouse AMRR?

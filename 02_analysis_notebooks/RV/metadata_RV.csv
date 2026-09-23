@@ -1,0 +1,16 @@
+sample_id,Sex,Exposure,Tissue,Mouse_ID,Notes
+CTRL_F1,F,CTRL,RV,FC1,
+CTRL_F2,F,CTRL,RV,FC2,
+CTRL_F4,F,CTRL,RV,FC4,VERIFY: filename FC4 vs decoding sheet 4FC - same mouse?
+CTRL_M1,M,CTRL,RV,MC1,
+CTRL_M2,M,CTRL,RV,MC2,
+CTRL_M3,M,CTRL,RV,MC3,
+F1C1,F,Crystalline,RV,F1C1,
+F1C2,F,Crystalline,RV,F1C2,
+F2C2,F,Crystalline,RV,F2C2,
+M1C1,M,Crystalline,RV,M1C1,
+M1C2,M,Crystalline,RV,M1C2,
+M1C3,M,Crystalline,RV,M1C3,
+FAmp_0,F,Amorphous,RV,AMO,
+FAmp_LL,F,Amorphous,RV,AMLL,
+FAmp_RR,F,Amorphous,RV,AMRR,
